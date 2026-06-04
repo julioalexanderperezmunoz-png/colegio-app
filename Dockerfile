@@ -1,6 +1,6 @@
-FROM php:8.4-apache
+FROM php:8.4-cli
 
-# Instalar dependencias del sistema y extensiones
+# Instalar dependencias
 RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     zip \
@@ -16,46 +16,28 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Instalar Composer
 COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
 
-# Configurar Apache: DocumentRoot a /var/www/html/public
-ENV APACHE_DOCUMENT_ROOT /var/www/html/public
-RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf
-RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
-
-# Habilitar mod_rewrite y mod_headers
-RUN a2enmod rewrite headers
-
-# Cambiar el puerto de Apache al que Render usa (8080)
-RUN sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
-RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
-
 WORKDIR /var/www/html
 
 # Copiar todo el código
 COPY . .
 
-# Dar permisos a la carpeta public y storage
-RUN chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
-
-# Permisos especiales para el directorio public (asegurar que index.php es legible)
-RUN chown -R www-data:www-data public \
-    && chmod -R 755 public
-
-# Crear base de datos SQLite y dar permisos
-RUN mkdir -p database \
-    && touch database/database.sqlite \
-    && chown -R www-data:www-data database \
-    && chmod -R 775 database
-
 # Instalar dependencias PHP de Composer
 RUN composer install --no-interaction --optimize-autoloader --no-dev --no-scripts --ignore-platform-reqs
-
-# Ejecutar scripts de Laravel
 RUN php artisan package:discover --ansi || true
 
 # Instalar dependencias Node y compilar assets de Vite
 RUN npm install && npm run build
 
-EXPOSE 8080
+# Crear base de datos SQLite y permisos
+RUN mkdir -p database \
+    && touch database/database.sqlite \
+    && chmod -R 777 database
 
-CMD ["apache2-foreground"]
+# Dar permisos a storage y bootstrap/cache
+RUN chmod -R 777 storage bootstrap/cache
+
+# Exponer el puerto que usa artisan serve (por defecto 8000, pero Render asigna el puerto mediante PORT)
+EXPOSE ${PORT:-8080}
+
+# Usar artisan serve, escuchando en todas las interfaces y en el puerto que Render asigna
+CMD php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
